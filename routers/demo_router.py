@@ -1,18 +1,23 @@
+import asyncio
+
 from fastapi import APIRouter, status
 
 from repositories.demo_repository import DemoRepository
 from schemas.gestion_schema import (
     DemoActualizar, DemoCrear, MovimientoDemoActualizar, MovimientoDemoCrear,
 )
+from ws_manager.manager import manager
 
 router = APIRouter(prefix="/demos", tags=["DEMO"])
 demo_repo = DemoRepository()
 
 
 @router.get("/vehiculo/{vehiculo_id}", summary="Listar DEMOs de un vehículo",
-            description="**SP:** `sp_obtener_demos`")
-def obtener_demos(vehiculo_id: int):
-    return demo_repo.obtener_demos_vehiculo(vehiculo_id)
+            description="También se avisa por WebSocket. **SP:** `sp_obtener_demos`")
+async def obtener_demos(vehiculo_id: int):
+    demos = await asyncio.to_thread(demo_repo.obtener_demos_vehiculo, vehiculo_id)
+    await manager.notificar_consulta(vehiculo_id, "demos", demos)
+    return demos
 
 
 @router.get("/{demo_id}/movimientos", summary="Listar movimientos de una DEMO",

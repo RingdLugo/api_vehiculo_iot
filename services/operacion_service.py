@@ -7,6 +7,7 @@ from repositories.comando_repository import ComandoRepository
 from repositories.demo_repository import DemoRepository
 from repositories.estado_historial_repository import EstadoHistorialRepository
 from repositories.vehiculo_repository import VehiculoRepository
+from ws_manager.eventos import TipoEvento
 from ws_manager.manager import manager
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,7 @@ class OperacionService:
             raise RuntimeError("Error de base de datos al registrar el movimiento.") from e
 
         await manager.broadcast_to_vehicle(vehiculo_id, {
-            "tipo": "movimiento_individual",
+            "tipo": TipoEvento.MOVIMIENTO_INDIVIDUAL,
             "comando_id": comando_id,
             "codigo": comando.get("codigo"),
             "origen": origen,
@@ -129,7 +130,7 @@ class OperacionService:
         cancelar = self.cancelaciones[vehiculo_id]
         try:
             await manager.broadcast_to_vehicle(vehiculo_id, {
-                "tipo": "demo_inicio", "demo_id": demo_id, "total_movimientos": len(movimientos),
+                "tipo": TipoEvento.DEMO_INICIO, "demo_id": demo_id, "total_movimientos": len(movimientos),
             })
 
             for mov in movimientos:
@@ -145,7 +146,7 @@ class OperacionService:
                 await asyncio.to_thread(self.estado_repo.actualizar_estado, vehiculo_id, comando_id, "DEMO")
 
                 await manager.broadcast_to_vehicle(vehiculo_id, {
-                    "tipo": "demo_movimiento",
+                    "tipo": TipoEvento.DEMO_MOVIMIENTO,
                     "demo_id": demo_id,
                     "comando_id": comando_id,
                     "codigo": codigos.get(comando_id),
@@ -162,12 +163,12 @@ class OperacionService:
                 except asyncio.TimeoutError:
                     pass
 
-            await manager.broadcast_to_vehicle(vehiculo_id, {"tipo": "demo_fin", "demo_id": demo_id})
+            await manager.broadcast_to_vehicle(vehiculo_id, {"tipo": TipoEvento.DEMO_FIN, "demo_id": demo_id})
 
         except Exception as e:
             logger.exception("Error durante la ejecución de la DEMO %s", demo_id)
             await manager.broadcast_to_vehicle(vehiculo_id, {
-                "tipo": "demo_error", "demo_id": demo_id, "error": "Error interno durante la DEMO.",
+                "tipo": TipoEvento.DEMO_ERROR, "demo_id": demo_id, "error": "Error interno durante la DEMO.",
             })
         finally:
             self.demos_activas.discard(vehiculo_id)
@@ -176,7 +177,7 @@ class OperacionService:
     @staticmethod
     async def _notificar_cancelacion(vehiculo_id: int, demo_id: int):
         await manager.broadcast_to_vehicle(vehiculo_id, {
-            "tipo": "demo_cancelada",
+            "tipo": TipoEvento.DEMO_CANCELADA,
             "demo_id": demo_id,
             "mensaje": "La DEMO fue cancelada por el usuario.",
         })

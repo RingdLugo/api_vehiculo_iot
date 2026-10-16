@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cliente WebSocket - Vehículo IoT</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --card: #ffffff; --text: #1d2433; --muted: #667085; --line: #dde1e8;
+    --accent: #2563eb; --ok: #15803d; --warn: #b45309; --err: #b91c1c; --code: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1420; --card: #171d2c; --text: #e6e9f0; --muted: #94a0b8; --line: #2a3348;
+      --accent: #5b8cff; --ok: #4ade80; --warn: #fbbf24; --err: #f87171; --code: #0f1420;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+         font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-bottom: 14px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+             color: var(--muted); margin: 0 0 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 4px; }
+  input, select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px;
+                  background: var(--bg); color: var(--text); font-size: 14px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  button { padding: 9px 14px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+           background: var(--card); color: var(--text); font-size: 14px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--err); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 99px; font-size: 13px;
+           border: 1px solid var(--line); color: var(--muted); }
+  .badge.on { color: var(--ok); border-color: var(--ok); }
+  #log { height: 380px; overflow-y: auto; background: var(--code); border: 1px solid var(--line);
+         border-radius: 8px; padding: 8px; font-size: 13px; }
+  .line { padding: 5px 6px; border-bottom: 1px solid var(--line); }
+  .line:last-child { border-bottom: 0; }
+  .hora { color: var(--muted); margin-right: 8px; font-variant-numeric: tabular-nums; }
+  .info { color: var(--text); } .ok { color: var(--ok); } .warn { color: var(--warn); }
+  .err { color: var(--err); } .mov { color: var(--accent); }
+  details { margin-top: 3px; } summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Cliente WebSocket · Vehículo IoT</h1>
+  <p class="sub">Práctica 2.5. Primero conecta el WebSocket y luego manda los POST para ver los eventos.</p>
+
+  <div class="card">
+    <h2>Configuración</h2>
+    <div class="grid">
+      <div><label for="base">URL de la API</label><input id="base" value="http://localhost:8000"></div>
+      <div><label for="vehiculo">Vehículo (id)</label><input id="vehiculo" type="number" value="5"></div>
+      <div><label for="comando">Comando (id_comando)</label>
+        <select id="comando">
+          <option value="14">14 · AVANZAR</option>
+          <option value="15">15 · RETROCEDER</option>
+          <option value="16">16 · GIRAR_IZQUIERDA</option>
+          <option value="17">17 · GIRAR_DERECHA</option>
+          <option value="18">18 · SUBIR_BRAZO</option>
+          <option value="19">19 · BAJAR_BRAZO</option>
+          <option value="20">20 · ABRIR_PALA</option>
+          <option value="21">21 · CERRAR_PALA</option>
+          <option value="22">22 · DETENER</option>
+        </select></div>
+      <div><label for="demo">DEMO (id)</label><input id="demo" type="number" value="2"></div>
+      <div><label for="origen">Origen</label><input id="origen" value="WEB_API"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>WebSocket</h2>
+    <div class="row">
+      <button class="primary" id="btnConectar">Conectar</button>
+      <button id="btnDesconectar" disabled>Desconectar</button>
+      <span class="badge" id="estado">Desconectado</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Acciones (POST)</h2>
+    <div class="row">
+      <button id="btnMover">Mover vehículo</button>
+      <button id="btnIniciar" class="primary">Iniciar DEMO</button>
+      <button id="btnDetener" class="danger">Detener DEMO</button>
+      <button id="btnHistorial">Ver historial (GET)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Eventos y respuestas</h2>
+    <div id="log"></div>
+    <div class="row" style="margin-top:10px"><button id="btnLimpiar">Limpiar</button></div>
+  </div>
+</div>
+
+<script>
+  let ws = null;
+  const $ = (id) => document.getElementById(id);
+  const base = () => $("base").value.trim().replace(/\/+$/, "");
+  const vehiculo = () => $("vehiculo").value.trim();
+
+  function log(texto, clase, datos) {
+    const linea = document.createElement("div");
+    linea.className = "line " + (clase || "info");
+    const hora = document.createElement("span");
+    hora.className = "hora";
+    hora.textContent = new Date().toLocaleTimeString();
+    linea.appendChild(hora);
+    linea.appendChild(document.createTextNode(texto));
+    if (datos !== undefined && datos !== null) {
+      const det = document.createElement("details");
+      const sum = document.createElement("summary");
+      sum.textContent = "ver JSON";
+      const pre = document.createElement("pre");
+      pre.textContent = JSON.stringify(datos, null, 2);
+      det.appendChild(sum);
+      det.appendChild(pre);
+      linea.appendChild(det);
+    }
+    const caja = $("log");
+    caja.appendChild(linea);
+    caja.scrollTop = caja.scrollHeight;
+  }
+
+  function ponerEstado(conectado) {
+    $("estado").textContent = conectado ? "Conectado" : "Desconectado";
+    $("estado").className = "badge" + (conectado ? " on" : "");
+    $("btnConectar").disabled = conectado;
+    $("btnDesconectar").disabled = !conectado;
+  }
+
+  function describir(m) {
+    switch (m.tipo) {
+      case "conexion_establecida": return ["Conexión establecida con el vehículo " + m.vehiculo_id, "ok"];
+      case "movimiento_individual": return ["Movimiento individual · comando " + m.comando_id + " (código " + m.codigo + ") · origen " + m.origen, "ok"];
+      case "demo_inicio": return ["DEMO " + m.demo_id + " iniciada · " + m.total_movimientos + " movimientos", "mov"];
+      case "demo_movimiento": return ["DEMO · paso " + m.orden + " · comando " + m.comando_id + " (código " + m.codigo + ") · " + m.duracion_ms + " ms + pausa " + m.pausa_ms + " ms", "mov"];
+      case "demo_fin": return ["DEMO " + m.demo_id + " terminó", "ok"];
+      case "demo_cancelada": return ["DEMO " + m.demo_id + " cancelada", "warn"];
+      case "demo_error": return ["Error en la DEMO " + m.demo_id, "err"];
+      case "pong": return ["pong", "info"];
+      default: return [m.tipo, "info"];
+    }
+  }
+
+  function conectar() {
+    if (ws) return;
+    const url = base().replace(/^http/, "ws") + "/ws/vehiculo/" + vehiculo();
+    log("Conectando a " + url + " ...", "info");
+    try {
+      ws = new WebSocket(url);
+    } catch (e) {
+      log("URL no válida: " + e.message, "err");
+      ws = null;
+      return;
+    }
+    ws.onopen = () => ponerEstado(true);
+    ws.onmessage = (ev) => {
+      let m;
+      try { m = JSON.parse(ev.data); } catch (e) { log(ev.data, "info"); return; }
+      const [texto, clase] = describir(m);
+      log(texto, clase, m);
+    };
+    ws.onerror = () => log("No se pudo conectar. Revisa que la API esté encendida y que el vehículo exista.", "err");
+    ws.onclose = () => { log("WebSocket cerrado", "warn"); ws = null; ponerEstado(false); };
+  }
+
+  function desconectar() { if (ws) ws.close(); }
+
+  async function llamar(metodo, ruta, cuerpo) {
+    try {
+      const opciones = { method: metodo, headers: { "Content-Type": "application/json" } };
+      if (cuerpo) opciones.body = JSON.stringify(cuerpo);
+      const r = await fetch(base() + ruta, opciones);
+      let datos = null;
+      try { datos = await r.json(); } catch (e) { /* sin cuerpo JSON */ }
+      log(metodo + " " + ruta + " → " + r.status, r.ok ? "ok" : "err", datos);
+    } catch (e) {
+      log("No se pudo llamar a " + ruta + ": " + e.message, "err");
+    }
+  }
+
+  $("btnConectar").onclick = conectar;
+  $("btnDesconectar").onclick = desconectar;
+  $("btnLimpiar").onclick = () => { $("log").innerHTML = ""; };
+  $("btnMover").onclick = () => llamar("POST", "/vehiculos/" + vehiculo() + "/movimiento",
+    { comando_id: Number($("comando").value), origen: $("origen").value.trim() || "WEB_API" });
+  $("btnIniciar").onclick = () => llamar("POST", "/vehiculos/" + vehiculo() + "/demo/iniciar",
+    { demo_id: Number($("demo").value) });
+  $("btnDetener").onclick = () => llamar("POST", "/vehiculos/" + vehiculo() + "/demo/detener");
+  $("btnHistorial").onclick = () => llamar("GET", "/vehiculos/" + vehiculo() + "/historial");
+</script>
+</body>
+</html>
