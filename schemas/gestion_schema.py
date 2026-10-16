@@ -13,13 +13,13 @@ class VehiculoActualizar(VehiculoCrear):
 class ComandoCrear(BaseModel):
     vehiculo_id: int = Field(..., example=1)
     nombre: str = Field(..., min_length=1, example="Avanzar")
-    codigo: str = Field(..., min_length=1, example="CMD_FWD")
+    codigo: int = Field(..., description="Código numérico del comando (único por vehículo).", example=1)
     descripcion: str = Field("", example="Mueve el vehículo hacia adelante")
 
 
 class ComandoActualizar(BaseModel):
     nombre: str = Field(..., min_length=1)
-    codigo: str = Field(..., min_length=1)
+    codigo: int = Field(..., description="Código numérico del comando (único por vehículo).")
     descripcion: str = ""
     activo: bool = True
 
