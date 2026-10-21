@@ -37,7 +37,6 @@ class OperacionService:
         self.cancelaciones: dict[int, asyncio.Event] = {}
         self._tareas: set[asyncio.Task] = set()
 
-    # ------------------------------------------------------------------ utilidades
     async def _validar_vehiculo(self, vehiculo_id: int) -> dict:
         vehiculo = await asyncio.to_thread(self.vehiculo_repo.obtener_por_id, vehiculo_id)
         if not vehiculo:
@@ -56,7 +55,6 @@ class OperacionService:
     def tiene_demo_activa(self, vehiculo_id: int) -> bool:
         return vehiculo_id in self.demos_activas
 
-    # ------------------------------------------------------- movimiento individual
     async def ejecutar_movimiento_individual(self, vehiculo_id: int, comando_id: int, origen: str):
         """Valida, actualiza estado + historial en UNA transacción y notifica por WebSocket."""
         await self._validar_vehiculo(vehiculo_id)
@@ -82,7 +80,6 @@ class OperacionService:
         })
         return {"mensaje": "Movimiento individual procesado y registrado en historial exitosamente."}
 
-    # ------------------------------------------------------------------------ DEMO
     async def iniciar_demo(self, vehiculo_id: int, demo_id: int):
         """Valida y lanza la DEMO en segundo plano; responde de inmediato."""
         if vehiculo_id in self.demos_activas:
@@ -90,7 +87,6 @@ class OperacionService:
                 "Ya existe una DEMO en ejecución para este vehículo. Debe finalizar o cancelarse primero."
             )
 
-        # Se reserva el vehículo antes de cualquier await para evitar duplicados.
         self.demos_activas.add(vehiculo_id)
         try:
             await self._validar_vehiculo(vehiculo_id)
@@ -142,7 +138,6 @@ class OperacionService:
                 duracion_ms = _entero(mov.get("duracion_ms"), 1000)
                 pausa_ms = _entero(mov.get("pausa_ms"), 500)
 
-                # Solo actualiza el último estado; sp_registrar_historial no se invoca.
                 await asyncio.to_thread(self.estado_repo.actualizar_estado, vehiculo_id, comando_id, "DEMO")
 
                 await manager.broadcast_to_vehicle(vehiculo_id, {
@@ -155,7 +150,6 @@ class OperacionService:
                     "pausa_ms": pausa_ms,
                 })
 
-                # Espera interrumpible: si llega DETENER, se despierta al instante.
                 try:
                     await asyncio.wait_for(cancelar.wait(), timeout=(duracion_ms + pausa_ms) / 1000.0)
                     await self._notificar_cancelacion(vehiculo_id, demo_id)
@@ -191,5 +185,4 @@ class OperacionService:
         return {"mensaje": "Señal de detención enviada. La DEMO se suspenderá inmediatamente."}
 
 
-# Instancia única compartida por todos los routers (el estado de DEMO vive aquí).
 operacion_service = OperacionService()

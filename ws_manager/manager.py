@@ -5,7 +5,7 @@ from typing import Dict, List
 from fastapi import WebSocket
 
 from repositories.estado_historial_repository import EstadoHistorialRepository
-from repositories.comando_repository import ComandoRepository  # <-- Importamos el repositorio de comandos
+from repositories.comando_repository import ComandoRepository
 from ws_manager.eventos import TipoEvento, construir_evento
 
 logger = logging.getLogger(__name__)
@@ -21,34 +21,25 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[int, List[WebSocket]] = {}
         self.estado_repo = EstadoHistorialRepository()
-        self.comando_repo = ComandoRepository()  # <-- Inicializamos el repositorio de comandos
+        self.comando_repo = ComandoRepository()
 
     async def connect(self, vehiculo_id: int, websocket: WebSocket):
-        """Acepta la conexión, la registra y envía el estado inicial junto con los comandos disponibles."""
+        """Acepta la conexión, la registra y envía únicamente el estado inicial más reciente."""
         await websocket.accept()
         self.active_connections.setdefault(vehiculo_id, []).append(websocket)
 
         try:
-            # 1. Obtenemos el último estado
             ultimo = await asyncio.to_thread(self.estado_repo.obtener_estado, vehiculo_id)
             estado_inicial = ultimo if ultimo else {"mensaje": "Sin estado previo registrado"}
-
-            # 2. Obtenemos los comandos / procedimientos asociados al vehículo
-            comandos = await asyncio.to_thread(self.comando_repo.obtener_por_vehiculo, vehiculo_id)
-            lista_comandos = comandos if comandos else []
-
         except Exception:
-            logger.exception("No se pudo consultar el estado o comandos iniciales del vehículo %s", vehiculo_id)
+            logger.exception("No se pudo consultar el estado inicial del vehículo %s", vehiculo_id)
             estado_inicial = {"mensaje": "Error al consultar estado inicial"}
-            lista_comandos = []
 
-        # Enviamos el evento inicial incluyendo tanto el estado como la lista de comandos/procedimientos
         await websocket.send_json(
             construir_evento(
                 TipoEvento.CONEXION_ESTABLECIDA, 
                 vehiculo_id, 
-                estado_inicial=estado_inicial,
-                comandos_disponibles=lista_comandos  # <-- Aquí viajan tus comandos/procedimientos por el WebSocket
+                estado_inicial=estado_inicial
             )
         )
 

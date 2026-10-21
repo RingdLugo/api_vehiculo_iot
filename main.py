@@ -22,7 +22,7 @@ origenes = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",") if o.st
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origenes,
-    allow_credentials=origenes != ["*"],  # "*" y credenciales no son compatibles
+    allow_credentials=origenes != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,7 +42,7 @@ async def integridad_handler(request: Request, exc: pymysql.err.IntegrityError):
 @app.exception_handler(pymysql.MySQLError)
 async def mysql_handler(request: Request, exc: pymysql.MySQLError):
     codigo = exc.args[0] if exc.args and isinstance(exc.args[0], int) else None
-    if codigo == 1644 and len(exc.args) > 1:  # SIGNAL SQLSTATE '45000' lanzado por un SP
+    if codigo == 1644 and len(exc.args) > 1:
         return JSONResponse(status_code=400, content={"detail": str(exc.args[1])})
     logger.error("Error de base de datos: %s", exc)
     return JSONResponse(status_code=500, content={"detail": "Error interno en el servidor de base de datos."})

@@ -27,7 +27,6 @@ def _vehiculo_o_404(vehiculo_id: int) -> dict:
     return vehiculo
 
 
-# ------------------------------------------------------------------ GET
 @router.get("/", summary="Listar todos los vehículos",
             description="Listado completo de vehículos. **SP:** `sp_obtener_vehiculos`")
 def obtener_vehiculos():
@@ -72,7 +71,6 @@ def obtener_detalle_completo_vehiculo(vehiculo_id: int):
     }
 
 
-# ----------------------------------------------------------- POST: gestión
 @router.post("/", status_code=status.HTTP_201_CREATED, summary="Crear vehículo",
              description="Registra un vehículo. **SP:** `sp_crear_vehiculo`")
 def crear_vehiculo(data: VehiculoCrear):
@@ -98,7 +96,6 @@ def eliminar_vehiculo(vehiculo_id: int):
     return vehiculo_repo.eliminar(vehiculo_id)
 
 
-# ------------------------------------------------- POST: operaciones
 @router.post("/{vehiculo_id}/movimiento", status_code=status.HTTP_201_CREATED,
              summary="Ejecutar movimiento individual",
              description=("Valida vehículo y comando, y en UNA transacción actualiza el estado y registra el "
