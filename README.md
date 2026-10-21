@@ -299,10 +299,8 @@ api_vehiculo_iot/
 │   └── manager.py                  # ConnectionManager (pools de clientes por vehículo)
 │
 ├── .env                            # Variables de entorno privadas (ignorado en Git)
-├── .env.example                    # Plantilla de variables de entorno sin datos sensibles
 ├── .gitignore                      # Exclusiones de Git (.env, .venv, etc.)
 ├── main.py                         # Entrada FastAPI, middlewares CORS y handlers de error
-├── Manuscrito.jpeg                 # Infografía técnica de las 21 APIs y flujo WSS
 ├── probar_conexion.py              # Script de prueba de conectividad con Amazon RDS
 └── requirements.txt                # Dependencias del proyecto
 ```
