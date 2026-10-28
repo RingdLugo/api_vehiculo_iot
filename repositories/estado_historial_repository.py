@@ -1,17 +1,25 @@
+from models.entidades import EstadoVehiculo, RegistroHistorial
 from repositories.base_repository import BaseRepository
-
-LIMITE_HISTORIAL = 10
 
 
 class EstadoHistorialRepository(BaseRepository):
-    """Gestiona el estado actual y el historial de movimientos individuales."""
+    """Estado actual e historial de movimientos individuales."""
+
+    LIMITE_HISTORIAL = 10
+
+    @property
+    def entidad(self) -> str:
+        return "estado_historial"
+
+    def construir(self, fila: dict) -> EstadoVehiculo:
+        return EstadoVehiculo(fila)
 
     def obtener_estado(self, vehiculo_id: int):
         """sp_obtener_estado"""
-        return self._consultar("sp_obtener_estado", (vehiculo_id,), uno=True)
+        return self._obtener("sp_obtener_estado", (vehiculo_id,))
 
     def actualizar_estado(self, vehiculo_id: int, comando_id: int, origen: str):
-        """sp_actualizar_estado (lo usan movimientos individuales y DEMO)."""
+        """sp_actualizar_estado (movimientos individuales y DEMO)."""
         self._escribir("sp_actualizar_estado", (vehiculo_id, comando_id, origen))
         return True
 
@@ -21,30 +29,12 @@ class EstadoHistorialRepository(BaseRepository):
         return True
 
     def registrar_movimiento_atomico(self, vehiculo_id: int, comando_id: int, origen: str):
-        """Ejecuta sp_actualizar_estado + sp_registrar_historial en UNA sola
-        transacción: o se guardan ambos o no se guarda ninguno."""
-        conexion = self.db.obtener_conexion()
-        try:
-            with conexion.cursor() as cursor:
-                cursor.execute("CALL sp_actualizar_estado(%s, %s, %s)", (vehiculo_id, comando_id, origen))
-                while cursor.nextset():
-                    pass
-                cursor.execute("CALL sp_registrar_historial(%s, %s, %s)", (vehiculo_id, comando_id, origen))
-                while cursor.nextset():
-                    pass
-            conexion.commit()
-            return True
-        except Exception:
-            conexion.rollback()
-            raise
-        finally:
-            conexion.close()
+        """sp_actualizar_estado + sp_registrar_historial en UNA sola transacción."""
+        params = (vehiculo_id, comando_id, origen)
+        self._transaccion([("sp_actualizar_estado", params), ("sp_registrar_historial", params)])
+        return True
 
-    def obtener_historial_reciente(self, vehiculo_id: int):
-        """sp_obtener_historial limitado a los 10 movimientos más recientes.
-
-        Requiere que el SP ordene de más reciente a más antiguo
-        (ORDER BY ... DESC). Ver README, sección "Historial".
-        """
-        resultado = self._consultar("sp_obtener_historial", (vehiculo_id,))
-        return list(resultado[:LIMITE_HISTORIAL]) if resultado else []
+    def obtener_historial_reciente(self, vehiculo_id: int) -> list[RegistroHistorial]:
+        """sp_obtener_historial limitado a los 10 movimientos más recientes."""
+        filas = self._consultar("sp_obtener_historial", (vehiculo_id,)) or []
+        return [RegistroHistorial(f) for f in filas[:self.LIMITE_HISTORIAL]]

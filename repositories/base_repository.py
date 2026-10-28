@@ -1,27 +1,41 @@
+import logging
+from abc import ABC, abstractmethod
+from typing import List, Optional
+
 from config.database import DatabaseConnection
+from models.entidad import Entidad
+
+logger = logging.getLogger(__name__)
 
 
-def extraer_id(fila: dict, *claves: str):
-    """Devuelve el primer valor existente entre las claves indicadas.
+class BaseRepository(ABC):
+    """Clase abstracta base de todos los repositorios.
 
-    Permite tolerar nombres de columna distintos devueltos por los SP
-    (por ejemplo "id" o "id_comando").
+    - ABSTRACCIÓN: oculta la conexión y los CALL a Stored Procedures.
+    - ENCAPSULAMIENTO: la conexión es privada; solo las subclases usan los
+      métodos protegidos `_consultar`, `_escribir`, `_listar`, `_obtener`.
+    - POLIMORFISMO: `construir` es abstracto; cada repositorio devuelve su propio
+      tipo de entidad y el resto del código lo trata como `Entidad`.
     """
-    for clave in claves:
-        if fila.get(clave) is not None:
-            return fila[clave]
-    return None
 
+    def __init__(self, db: DatabaseConnection):
+        self.__db = db
 
-class BaseRepository:
-    """Clase base: centraliza el patrón abrir conexión -> CALL sp -> cerrar."""
+    @property
+    @abstractmethod
+    def entidad(self) -> str:
+        """Nombre de la entidad que gestiona el repositorio."""
 
-    def __init__(self):
-        self.db = DatabaseConnection()
+    @abstractmethod
+    def construir(self, fila: dict) -> Entidad:
+        """Convierte una fila de la BD en el objeto de dominio correspondiente."""
+
+    @staticmethod
+    def _llamada(sp: str, params: tuple) -> str:
+        return f"CALL {sp}({', '.join(['%s'] * len(params))})"
 
     def _consultar(self, sp: str, params: tuple = (), uno: bool = False):
-        """Ejecuta un SP de lectura y devuelve una fila (uno=True) o todas."""
-        conexion = self.db.obtener_conexion()
+        conexion = self.__db.obtener_conexion()
         try:
             with conexion.cursor() as cursor:
                 cursor.execute(self._llamada(sp, params), params)
@@ -30,8 +44,7 @@ class BaseRepository:
             conexion.close()
 
     def _escribir(self, sp: str, params: tuple = (), devolver: bool = False):
-        """Ejecuta un SP de escritura dentro de una transacción."""
-        conexion = self.db.obtener_conexion()
+        conexion = self.__db.obtener_conexion()
         try:
             with conexion.cursor() as cursor:
                 cursor.execute(self._llamada(sp, params), params)
@@ -40,11 +53,41 @@ class BaseRepository:
             return resultado
         except Exception:
             conexion.rollback()
+            logger.exception("Fallo al ejecutar %s (%s)", sp, self.entidad)
             raise
         finally:
             conexion.close()
 
-    @staticmethod
-    def _llamada(sp: str, params: tuple) -> str:
-        marcadores = ", ".join(["%s"] * len(params))
-        return f"CALL {sp}({marcadores})"
+    def _transaccion(self, llamadas: list[tuple[str, tuple]]) -> None:
+        """Ejecuta varios SP en UNA sola transacción."""
+        conexion = self.__db.obtener_conexion()
+        try:
+            with conexion.cursor() as cursor:
+                for sp, params in llamadas:
+                    cursor.execute(self._llamada(sp, params), params)
+                    while cursor.nextset():
+                        pass
+            conexion.commit()
+        except Exception:
+            conexion.rollback()
+            raise
+        finally:
+            conexion.close()
+
+    def _listar(self, sp: str, params: tuple = ()) -> List[Entidad]:
+        return [self.construir(f) for f in self._consultar(sp, params) or []]
+
+    def _obtener(self, sp: str, params: tuple = ()) -> Optional[Entidad]:
+        fila = self._consultar(sp, params, uno=True)
+        return self.construir(fila) if fila else None
+
+
+class RepositorioCRUD(BaseRepository, ABC):
+    """Segundo nivel de la jerarquía (herencia multinivel).
+
+    Obliga a todo repositorio con ciclo de vida completo a implementar `eliminar`.
+    """
+
+    @abstractmethod
+    def eliminar(self, identificador: int) -> dict:
+        """Elimina la entidad (cada repositorio llama a su propio SP)."""

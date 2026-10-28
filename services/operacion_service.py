@@ -2,13 +2,16 @@ import asyncio
 import logging
 from typing import Optional
 
-from repositories.base_repository import extraer_id
+from models.entidades import Comando, MovimientoDemo
 from repositories.comando_repository import ComandoRepository
 from repositories.demo_repository import DemoRepository
 from repositories.estado_historial_repository import EstadoHistorialRepository
 from repositories.vehiculo_repository import VehiculoRepository
-from ws_manager.eventos import TipoEvento
-from ws_manager.manager import manager
+from ws_manager.eventos import (
+    Evento, EventoDemoCancelada, EventoDemoError, EventoDemoFin, EventoDemoInicio,
+    EventoDemoMovimiento, EventoMovimientoIndividual,
+)
+from ws_manager.manager import ConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -17,172 +20,163 @@ class DemoActivaError(ValueError):
     """Ya existe una DEMO en ejecución para el vehículo (HTTP 409)."""
 
 
-def _esta_activo(fila: dict) -> bool:
-    return bool(fila.get("activo", True))
+class SesionDemo:
+    """Objeto que representa UNA ejecución de DEMO (estado propio + métodos de instancia).
 
+    NO escribe en el historial; solo actualiza el estado y emite eventos.
+    """
 
-def _entero(valor, defecto: int) -> int:
-    return int(valor) if valor is not None else defecto
+    def __init__(self, vehiculo_id: int, demo_id: int, movimientos: list[MovimientoDemo],
+                 codigos: dict, estado_repo: EstadoHistorialRepository, manager: ConnectionManager):
+        self.__vehiculo_id = vehiculo_id
+        self.__demo_id = demo_id
+        self.__movimientos = movimientos
+        self.__codigos = codigos
+        self.__estado_repo = estado_repo
+        self.__manager = manager
+        self.__cancelar = asyncio.Event()
+
+    @property
+    def vehiculo_id(self) -> int:
+        return self.__vehiculo_id
+
+    @property
+    def total_movimientos(self) -> int:
+        return len(self.__movimientos)
+
+    def cancelar(self) -> None:
+        self.__cancelar.set()
+
+    async def __emitir(self, evento: Evento) -> None:
+        await self.__manager.broadcast_to_vehicle(evento)
+
+    async def ejecutar(self) -> None:
+        v, d = self.__vehiculo_id, self.__demo_id
+        try:
+            await self.__emitir(EventoDemoInicio(v, d, self.total_movimientos))
+
+            for mov in self.__movimientos:
+                if self.__cancelar.is_set():
+                    await self.__emitir(EventoDemoCancelada(v, d))
+                    return
+
+                await asyncio.to_thread(self.__estado_repo.actualizar_estado, v, mov.comando_id, "DEMO")
+                await self.__emitir(EventoDemoMovimiento(
+                    v, d, mov.comando_id, self.__codigos.get(mov.comando_id),
+                    mov.orden, mov.duracion_ms, mov.pausa_ms))
+
+                try:
+                    await asyncio.wait_for(self.__cancelar.wait(), timeout=mov.espera_total_segundos())
+                    await self.__emitir(EventoDemoCancelada(v, d))
+                    return
+                except asyncio.TimeoutError:
+                    pass
+
+            await self.__emitir(EventoDemoFin(v, d))
+
+        except Exception:
+            logger.exception("Error durante la ejecución de la DEMO %s", d)
+            await self.__emitir(EventoDemoError(v, d))
 
 
 class OperacionService:
     """Reglas de negocio: movimientos individuales, DEMO y control de concurrencia."""
 
-    def __init__(self):
-        self.estado_repo = EstadoHistorialRepository()
-        self.vehiculo_repo = VehiculoRepository()
-        self.comando_repo = ComandoRepository()
-        self.demo_repo = DemoRepository()
-        self.demos_activas: set[int] = set()
-        self.cancelaciones: dict[int, asyncio.Event] = {}
-        self._tareas: set[asyncio.Task] = set()
+    def __init__(self, vehiculo_repo: VehiculoRepository, comando_repo: ComandoRepository,
+                 demo_repo: DemoRepository, estado_repo: EstadoHistorialRepository,
+                 manager: ConnectionManager):
+        self.__vehiculo_repo = vehiculo_repo
+        self.__comando_repo = comando_repo
+        self.__demo_repo = demo_repo
+        self.__estado_repo = estado_repo
+        self.__manager = manager
+        self.__sesiones: dict[int, Optional[SesionDemo]] = {}
+        self.__tareas: set[asyncio.Task] = set()
 
-    async def _validar_vehiculo(self, vehiculo_id: int) -> dict:
-        vehiculo = await asyncio.to_thread(self.vehiculo_repo.obtener_por_id, vehiculo_id)
+    async def _validar_vehiculo(self, vehiculo_id: int):
+        vehiculo = await asyncio.to_thread(self.__vehiculo_repo.obtener_por_id, vehiculo_id)
         if not vehiculo:
             raise ValueError("El vehículo especificado no existe.")
-        if not _esta_activo(vehiculo):
+        if not vehiculo.esta_activo():
             raise ValueError("El vehículo se encuentra inactivo.")
         return vehiculo
 
     @staticmethod
-    def _buscar_comando(comandos: list, comando_id: int) -> Optional[dict]:
-        for cmd in comandos or []:
-            if extraer_id(cmd, "id_comando", "id") == comando_id and _esta_activo(cmd):
-                return cmd
-        return None
+    def _buscar_comando(comandos: list[Comando], comando_id: int) -> Optional[Comando]:
+        return next((c for c in comandos if c.id == comando_id and c.esta_activo()), None)
 
     def tiene_demo_activa(self, vehiculo_id: int) -> bool:
-        return vehiculo_id in self.demos_activas
+        return vehiculo_id in self.__sesiones
 
     async def ejecutar_movimiento_individual(self, vehiculo_id: int, comando_id: int, origen: str):
-        """Valida, actualiza estado + historial en UNA transacción y notifica por WebSocket."""
         await self._validar_vehiculo(vehiculo_id)
 
-        comandos = await asyncio.to_thread(self.comando_repo.obtener_por_vehiculo, vehiculo_id)
+        comandos = await asyncio.to_thread(self.__comando_repo.obtener_por_vehiculo, vehiculo_id)
         comando = self._buscar_comando(comandos, comando_id)
         if not comando:
             raise ValueError("El comando no existe, está inactivo o no pertenece a este vehículo.")
 
         try:
             await asyncio.to_thread(
-                self.estado_repo.registrar_movimiento_atomico, vehiculo_id, comando_id, origen
+                self.__estado_repo.registrar_movimiento_atomico, vehiculo_id, comando_id, origen
             )
         except Exception as e:
             logger.exception("Fallo al registrar el movimiento individual")
             raise RuntimeError("Error de base de datos al registrar el movimiento.") from e
 
-        await manager.broadcast_to_vehicle(vehiculo_id, {
-            "tipo": TipoEvento.MOVIMIENTO_INDIVIDUAL,
-            "comando_id": comando_id,
-            "codigo": comando.get("codigo"),
-            "origen": origen,
-        })
+        await self.__manager.broadcast_to_vehicle(
+            EventoMovimientoIndividual(vehiculo_id, comando_id, comando.codigo, origen)
+        )
         return {"mensaje": "Movimiento individual procesado y registrado en historial exitosamente."}
 
     async def iniciar_demo(self, vehiculo_id: int, demo_id: int):
-        """Valida y lanza la DEMO en segundo plano; responde de inmediato."""
-        if vehiculo_id in self.demos_activas:
+        if self.tiene_demo_activa(vehiculo_id):
             raise DemoActivaError(
                 "Ya existe una DEMO en ejecución para este vehículo. Debe finalizar o cancelarse primero."
             )
 
-        self.demos_activas.add(vehiculo_id)
+        self.__sesiones[vehiculo_id] = None     # reserva el cupo antes del primer await
         try:
             await self._validar_vehiculo(vehiculo_id)
 
-            demos = await asyncio.to_thread(self.demo_repo.obtener_demos_vehiculo, vehiculo_id)
-            demo = next(
-                (d for d in demos or [] if extraer_id(d, "id_demo", "id") == demo_id), None
-            )
-            if not demo or not _esta_activo(demo):
+            demos = await asyncio.to_thread(self.__demo_repo.obtener_demos_vehiculo, vehiculo_id)
+            demo = next((d for d in demos if d.id == demo_id), None)
+            if not demo or not demo.esta_activo():
                 raise ValueError("La DEMO no existe, está inactiva o no pertenece a este vehículo.")
 
-            movimientos = await asyncio.to_thread(self.demo_repo.obtener_movimientos_demo, demo_id)
+            movimientos = await asyncio.to_thread(self.__demo_repo.obtener_movimientos_demo, demo_id)
             if not movimientos:
                 raise ValueError("La DEMO no contiene movimientos registrados.")
-            movimientos = sorted(movimientos, key=lambda m: _entero(m.get("orden"), 0))
+            movimientos = sorted(movimientos, key=lambda m: m.orden)
 
-            comandos = await asyncio.to_thread(self.comando_repo.obtener_por_vehiculo, vehiculo_id)
-            codigos = {extraer_id(c, "id_comando", "id"): c.get("codigo") for c in comandos or []}
+            comandos = await asyncio.to_thread(self.__comando_repo.obtener_por_vehiculo, vehiculo_id)
+            codigos = {c.id: c.codigo for c in comandos}
         except Exception:
-            self.demos_activas.discard(vehiculo_id)
+            self.__sesiones.pop(vehiculo_id, None)
             raise
 
-        self.cancelaciones[vehiculo_id] = asyncio.Event()
-        tarea = asyncio.create_task(self._ejecutar_demo(vehiculo_id, demo_id, movimientos, codigos))
-        self._tareas.add(tarea)
-        tarea.add_done_callback(self._tareas.discard)
+        sesion = SesionDemo(vehiculo_id, demo_id, movimientos, codigos, self.__estado_repo, self.__manager)
+        self.__sesiones[vehiculo_id] = sesion
+        tarea = asyncio.create_task(self.__correr(sesion))
+        self.__tareas.add(tarea)
+        tarea.add_done_callback(self.__tareas.discard)
 
         return {
             "mensaje": "DEMO iniciada. Siga el avance por WebSocket.",
             "vehiculo_id": vehiculo_id,
             "demo_id": demo_id,
-            "total_movimientos": len(movimientos),
+            "total_movimientos": sesion.total_movimientos,
         }
 
-    async def _ejecutar_demo(self, vehiculo_id: int, demo_id: int, movimientos: list, codigos: dict):
-        """Emite los N movimientos por WebSocket. NO escribe en el historial."""
-        cancelar = self.cancelaciones[vehiculo_id]
+    async def __correr(self, sesion: SesionDemo) -> None:
         try:
-            await manager.broadcast_to_vehicle(vehiculo_id, {
-                "tipo": TipoEvento.DEMO_INICIO, "demo_id": demo_id, "total_movimientos": len(movimientos),
-            })
-
-            for mov in movimientos:
-                if cancelar.is_set():
-                    await self._notificar_cancelacion(vehiculo_id, demo_id)
-                    return
-
-                comando_id = extraer_id(mov, "id_comando", "comando_id", "id")
-                duracion_ms = _entero(mov.get("duracion_ms"), 1000)
-                pausa_ms = _entero(mov.get("pausa_ms"), 500)
-
-                await asyncio.to_thread(self.estado_repo.actualizar_estado, vehiculo_id, comando_id, "DEMO")
-
-                await manager.broadcast_to_vehicle(vehiculo_id, {
-                    "tipo": TipoEvento.DEMO_MOVIMIENTO,
-                    "demo_id": demo_id,
-                    "comando_id": comando_id,
-                    "codigo": codigos.get(comando_id),
-                    "orden": mov.get("orden"),
-                    "duracion_ms": duracion_ms,
-                    "pausa_ms": pausa_ms,
-                })
-
-                try:
-                    await asyncio.wait_for(cancelar.wait(), timeout=(duracion_ms + pausa_ms) / 1000.0)
-                    await self._notificar_cancelacion(vehiculo_id, demo_id)
-                    return
-                except asyncio.TimeoutError:
-                    pass
-
-            await manager.broadcast_to_vehicle(vehiculo_id, {"tipo": TipoEvento.DEMO_FIN, "demo_id": demo_id})
-
-        except Exception as e:
-            logger.exception("Error durante la ejecución de la DEMO %s", demo_id)
-            await manager.broadcast_to_vehicle(vehiculo_id, {
-                "tipo": TipoEvento.DEMO_ERROR, "demo_id": demo_id, "error": "Error interno durante la DEMO.",
-            })
+            await sesion.ejecutar()
         finally:
-            self.demos_activas.discard(vehiculo_id)
-            self.cancelaciones.pop(vehiculo_id, None)
-
-    @staticmethod
-    async def _notificar_cancelacion(vehiculo_id: int, demo_id: int):
-        await manager.broadcast_to_vehicle(vehiculo_id, {
-            "tipo": TipoEvento.DEMO_CANCELADA,
-            "demo_id": demo_id,
-            "mensaje": "La DEMO fue cancelada por el usuario.",
-        })
+            self.__sesiones.pop(sesion.vehiculo_id, None)
 
     async def cancelar_demo(self, vehiculo_id: int):
-        """Acción DETENER: prioridad inmediata, interrumpe incluso la espera en curso."""
-        evento = self.cancelaciones.get(vehiculo_id)
-        if vehiculo_id not in self.demos_activas or evento is None:
+        sesion = self.__sesiones.get(vehiculo_id)
+        if sesion is None:
             raise ValueError("No hay ninguna DEMO activa en este vehículo para cancelar.")
-        evento.set()
+        sesion.cancelar()
         return {"mensaje": "Señal de detención enviada. La DEMO se suspenderá inmediatamente."}
-
-
-operacion_service = OperacionService()

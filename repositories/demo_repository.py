@@ -1,16 +1,23 @@
-from repositories.base_repository import BaseRepository
+from models.entidades import Demo, MovimientoDemo
+from repositories.base_repository import RepositorioCRUD
 
 
-class DemoRepository(BaseRepository):
-    """Gestiona las DEMO y sus movimientos."""
+class DemoRepository(RepositorioCRUD):
+    @property
+    def entidad(self) -> str:
+        return "demo"
 
-    def obtener_demos_vehiculo(self, vehiculo_id: int):
+    def construir(self, fila: dict) -> Demo:
+        return Demo(fila)
+
+    def obtener_demos_vehiculo(self, vehiculo_id: int) -> list[Demo]:
         """sp_obtener_demos"""
-        return self._consultar("sp_obtener_demos", (vehiculo_id,))
+        return self._listar("sp_obtener_demos", (vehiculo_id,))
 
-    def obtener_movimientos_demo(self, demo_id: int):
+    def obtener_movimientos_demo(self, demo_id: int) -> list[MovimientoDemo]:
         """sp_obtener_movimientos_demo (secuencia de N movimientos)"""
-        return self._consultar("sp_obtener_movimientos_demo", (demo_id,))
+        filas = self._consultar("sp_obtener_movimientos_demo", (demo_id,)) or []
+        return [MovimientoDemo(f) for f in filas]
 
     def crear_demo(self, vehiculo_id: int, nombre: str, descripcion: str):
         """sp_crear_demo"""
@@ -21,23 +28,22 @@ class DemoRepository(BaseRepository):
         self._escribir("sp_actualizar_demo", (demo_id, nombre, descripcion, activo))
         return {"mensaje": "Demo actualizada exitosamente"}
 
-    def eliminar_demo(self, demo_id: int):
+    def eliminar(self, identificador: int) -> dict:
         """sp_eliminar_demo"""
-        self._escribir("sp_eliminar_demo", (demo_id,))
+        self._escribir("sp_eliminar_demo", (identificador,))
         return {"mensaje": "Demo eliminada exitosamente"}
 
-    def agregar_movimiento_demo(self, demo_id: int, comando_id: int, orden: int, duracion_ms: int, pausa_ms: int):
+    def agregar_movimiento_demo(self, demo_id: int, comando_id: int, orden: int,
+                                duracion_ms: int, pausa_ms: int):
         """sp_agregar_movimiento_demo"""
-        self._escribir(
-            "sp_agregar_movimiento_demo", (demo_id, comando_id, orden, duracion_ms, pausa_ms)
-        )
+        self._escribir("sp_agregar_movimiento_demo", (demo_id, comando_id, orden, duracion_ms, pausa_ms))
         return {"mensaje": "Movimiento de DEMO agregado exitosamente"}
 
-    def actualizar_movimiento_demo(self, movimiento_id: int, comando_id: int, orden: int, duracion_ms: int, pausa_ms: int):
+    def actualizar_movimiento_demo(self, movimiento_id: int, comando_id: int, orden: int,
+                                   duracion_ms: int, pausa_ms: int):
         """sp_actualizar_movimiento_demo"""
-        self._escribir(
-            "sp_actualizar_movimiento_demo", (movimiento_id, comando_id, orden, duracion_ms, pausa_ms)
-        )
+        self._escribir("sp_actualizar_movimiento_demo",
+                       (movimiento_id, comando_id, orden, duracion_ms, pausa_ms))
         return {"mensaje": "Movimiento de DEMO actualizado exitosamente"}
 
     def eliminar_movimiento_demo(self, movimiento_id: int):
